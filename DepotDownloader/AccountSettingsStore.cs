@@ -12,7 +12,7 @@ using ProtoBuf;
 namespace DepotDownloader
 {
     [ProtoContract]
-    class AccountSettingsStore
+    public class AccountSettingsStore
     {
         // Member 1 was a Dictionary<string, byte[]> for SentryData.
 
@@ -36,7 +36,7 @@ namespace DepotDownloader
             GuardData = [];
         }
 
-        static bool Loaded
+        public static bool Loaded
         {
             get { return Instance != null; }
         }
@@ -47,7 +47,7 @@ namespace DepotDownloader
         public static void LoadFromFile(string filename)
         {
             if (Loaded)
-                throw new Exception("Config already loaded");
+                return;
 
             if (IsolatedStorage.FileExists(filename))
             {

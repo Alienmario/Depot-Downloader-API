@@ -56,10 +56,12 @@ namespace DepotDownloader
 
         // input
         readonly SteamUser.LogOnDetails logonDetails;
+        readonly LoginCallbacks loginCallbacks;
 
-        public Steam3Session(SteamUser.LogOnDetails details)
+        public Steam3Session(SteamUser.LogOnDetails details, LoginCallbacks callbacks = null)
         {
             this.logonDetails = details;
+            this.loginCallbacks = callbacks;
             this.authenticatedUser = details.Username != null || ContentDownloader.Config.UseQrCode;
 
             var clientConfiguration = SteamConfiguration.Create(config =>
@@ -415,7 +417,7 @@ namespace DepotDownloader
                                 Password = logonDetails.Password,
                                 IsPersistentSession = ContentDownloader.Config.RememberPassword,
                                 GuardData = guarddata,
-                                Authenticator = new UserConsoleAuthenticator(),
+                                Authenticator = new CallbackAuthenticator(loginCallbacks)
                             });
                         }
                         catch (TaskCanceledException)
@@ -558,6 +560,14 @@ namespace DepotDownloader
                 or EResult.Expired
                 or EResult.Revoked;
 
+            if (loggedOn.Result != EResult.OK)
+            {
+                loginCallbacks?.LoginFailed?.Invoke(new LoginCallbacks.SteamLoginFailed()
+                {
+                    Result = loggedOn.Result
+                });
+            }
+
             if (isSteamGuard || is2FA || isAccessToken)
             {
                 bExpectingDisconnectRemote = true;
@@ -630,6 +640,11 @@ namespace DepotDownloader
 
             this.seq++;
             IsLoggedOn = true;
+            loginCallbacks?.LoginSuccess?.Invoke(new LoginCallbacks.SteamLoginSuccess()
+            {
+                Username = logonDetails.Username,
+                Steam3ID = logonDetails.AccountID,
+            });
 
             if (ContentDownloader.Config.CellID == 0)
             {

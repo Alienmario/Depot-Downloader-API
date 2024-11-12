@@ -15,11 +15,12 @@ using SteamKit2.CDN;
 
 namespace DepotDownloader
 {
-    class ContentDownloaderException(string value) : Exception(value)
+    public class ContentDownloaderException(string value) : Exception(value)
     {
     }
 
-    static class ContentDownloader
+
+    public static class ContentDownloader
     {
         public const uint INVALID_APP_ID = uint.MaxValue;
         public const uint INVALID_DEPOT_ID = uint.MaxValue;
@@ -281,7 +282,7 @@ namespace DepotDownloader
             return info["name"].AsString();
         }
 
-        public static bool InitializeSteam3(string username, string password)
+        public static bool InitializeSteam3(string username, string password, LoginCallbacks callbacks = null)
         {
             string loginToken = null;
 
@@ -297,8 +298,8 @@ namespace DepotDownloader
                     Password = loginToken == null ? password : null,
                     ShouldRememberPassword = Config.RememberPassword,
                     AccessToken = loginToken,
-                    LoginID = Config.LoginID ?? 0x534B32, // "SK2"
-                }
+                    LoginID = Config.LoginID ?? 0x534B32, // "SK2",
+                }, callbacks
             );
 
             if (!steam3.WaitForCredentials())
@@ -326,7 +327,7 @@ namespace DepotDownloader
             steam3.Disconnect();
         }
 
-        public static async Task DownloadPubfileAsync(uint appId, ulong publishedFileId)
+        public static async Task DownloadPubfileAsync(uint appId, ulong publishedFileId, DownloadCallbacks callbacks = null)
         {
             var details = await steam3.GetPublishedFileDetails(appId, publishedFileId);
 
@@ -336,7 +337,7 @@ namespace DepotDownloader
             }
             else if (details?.hcontent_file > 0)
             {
-                await DownloadAppAsync(appId, new List<(uint, ulong)> { (appId, details.hcontent_file) }, DEFAULT_BRANCH, null, null, null, false, true);
+                await DownloadAppAsync(appId, new List<(uint, ulong)> { (appId, details.hcontent_file) }, DEFAULT_BRANCH, null, null, null, false, true, callbacks);
             }
             else
             {
@@ -344,7 +345,7 @@ namespace DepotDownloader
             }
         }
 
-        public static async Task DownloadUGCAsync(uint appId, ulong ugcId)
+        public static async Task DownloadUGCAsync(uint appId, ulong ugcId, DownloadCallbacks callbacks = null)
         {
             SteamCloud.UGCDetailsCallback details = null;
 
@@ -363,7 +364,7 @@ namespace DepotDownloader
             }
             else
             {
-                await DownloadAppAsync(appId, new List<(uint, ulong)> { (appId, ugcId) }, DEFAULT_BRANCH, null, null, null, false, true);
+                await DownloadAppAsync(appId, new List<(uint, ulong)> { (appId, ugcId) }, DEFAULT_BRANCH, null, null, null, false, true, callbacks);
             }
         }
 
@@ -398,7 +399,7 @@ namespace DepotDownloader
             File.Move(fileStagingPath, fileFinalPath);
         }
 
-        public static async Task DownloadAppAsync(uint appId, List<(uint depotId, ulong manifestId)> depotManifestIds, string branch, string os, string arch, string language, bool lv, bool isUgc)
+        public static async Task DownloadAppAsync(uint appId, List<(uint depotId, ulong manifestId)> depotManifestIds, string branch, string os, string arch, string language, bool lv, bool isUgc, DownloadCallbacks callbacks = null)
         {
             cdnPool = new CDNClientPool(steam3, appId);
 
@@ -410,7 +411,9 @@ namespace DepotDownloader
             }
 
             Directory.CreateDirectory(Path.Combine(configPath, CONFIG_DIR));
-            DepotConfigStore.LoadFromFile(Path.Combine(configPath, CONFIG_DIR, "depot.config"));
+
+            if (!DepotConfigStore.Loaded)
+                DepotConfigStore.LoadFromFile(Path.Combine(configPath, CONFIG_DIR, "depot.config"));
 
             await steam3?.RequestAppInfo(appId);
 
@@ -535,7 +538,7 @@ namespace DepotDownloader
 
             try
             {
-                await DownloadSteam3Async(infos).ConfigureAwait(false);
+                await DownloadSteam3Async(infos, callbacks).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -632,7 +635,7 @@ namespace DepotDownloader
             public ulong depotBytesUncompressed;
         }
 
-        private static async Task DownloadSteam3Async(List<DepotDownloadInfo> depots)
+        private static async Task DownloadSteam3Async(List<DepotDownloadInfo> depots, DownloadCallbacks callbacks = null)
         {
             Ansi.Progress(Ansi.ProgressState.Indeterminate);
 
@@ -672,13 +675,21 @@ namespace DepotDownloader
                 }
             }
 
+            var depotIndex = 0;
             foreach (var depotFileData in depotsToDownload)
             {
-                await DownloadSteam3AsyncDepotFiles(cts, downloadCounter, depotFileData, allFileNamesAllDepots);
+                await DownloadSteam3AsyncDepotFiles(cts, downloadCounter, depotFileData, allFileNamesAllDepots, callbacks);
+                callbacks?.DepotDownloadComplete?.Invoke(new DownloadCallbacks.SteamDepotDownloadComplete()
+                {
+                    AppID = depotFileData.depotDownloadInfo.AppId,
+                    DepotID = depotFileData.depotDownloadInfo.DepotId,
+                    DepotIndex = depotIndex,
+                    TotalDepots = depotsToDownload.Count
+                });
+                depotIndex++;
             }
 
             Ansi.Progress(Ansi.ProgressState.Hidden);
-
             Console.WriteLine("Total downloaded: {0} bytes ({1} bytes uncompressed) from {2} depots",
                 downloadCounter.totalBytesCompressed, downloadCounter.totalBytesUncompressed, depots.Count);
         }
@@ -939,7 +950,7 @@ namespace DepotDownloader
         }
 
         private static async Task DownloadSteam3AsyncDepotFiles(CancellationTokenSource cts,
-            GlobalDownloadCounter downloadCounter, DepotFilesData depotFilesData, HashSet<string> allFileNamesAllDepots)
+            GlobalDownloadCounter downloadCounter, DepotFilesData depotFilesData, HashSet<string> allFileNamesAllDepots, DownloadCallbacks callbacks = null)
         {
             var depot = depotFilesData.depotDownloadInfo;
             var depotCounter = depotFilesData.depotCounter;
@@ -951,14 +962,14 @@ namespace DepotDownloader
 
             await Util.InvokeAsync(
                 files.Select(file => new Func<Task>(async () =>
-                    await Task.Run(() => DownloadSteam3AsyncDepotFile(cts, downloadCounter, depotFilesData, file, networkChunkQueue)))),
+                    await Task.Run(() => DownloadSteam3AsyncDepotFile(cts, downloadCounter, depotFilesData, file, networkChunkQueue, callbacks)))),
                 maxDegreeOfParallelism: Config.MaxDownloads
             );
 
             await Util.InvokeAsync(
                 networkChunkQueue.Select(q => new Func<Task>(async () =>
                     await Task.Run(() => DownloadSteam3AsyncDepotFileChunk(cts, downloadCounter, depotFilesData,
-                        q.fileData, q.fileStreamData, q.chunk)))),
+                        q.fileData, q.fileStreamData, q.chunk, callbacks)))),
                 maxDegreeOfParallelism: Config.MaxDownloads
             );
 
@@ -1002,7 +1013,8 @@ namespace DepotDownloader
             GlobalDownloadCounter downloadCounter,
             DepotFilesData depotFilesData,
             ProtoManifest.FileData file,
-            ConcurrentQueue<(FileStreamData, ProtoManifest.FileData, ProtoManifest.ChunkData)> networkChunkQueue)
+            ConcurrentQueue<(FileStreamData, ProtoManifest.FileData, ProtoManifest.ChunkData)> networkChunkQueue,
+            DownloadCallbacks callbacks = null)
         {
             cts.Token.ThrowIfCancellationRequested();
 
@@ -1157,6 +1169,13 @@ namespace DepotDownloader
                     {
                         depotDownloadCounter.sizeDownloaded += file.TotalSize;
                         Console.WriteLine("{0,6:#00.00}% {1}", (depotDownloadCounter.sizeDownloaded / (float)depotDownloadCounter.completeDownloadSize) * 100.0f, fileFinalPath);
+                        callbacks?.DepotDownloadProgress?.Invoke(new DownloadCallbacks.SteamDepotDownloadProgress()
+                        {
+                            Percentage = (depotDownloadCounter.sizeDownloaded / (float)depotDownloadCounter.completeDownloadSize) * 100.0f,
+                            FilePath = fileFinalPath,
+                            DepotSize = file.TotalSize,
+                            DownloadedSize = downloadCounter.completeDownloadSize
+                        });
                     }
 
                     lock (downloadCounter)
@@ -1208,7 +1227,8 @@ namespace DepotDownloader
             DepotFilesData depotFilesData,
             ProtoManifest.FileData file,
             FileStreamData fileStreamData,
-            ProtoManifest.ChunkData chunk)
+            ProtoManifest.ChunkData chunk,
+            DownloadCallbacks callbacks = null)
         {
             cts.Token.ThrowIfCancellationRequested();
 
@@ -1361,6 +1381,13 @@ namespace DepotDownloader
             {
                 var fileFinalPath = Path.Combine(depot.InstallDir, file.FileName);
                 Console.WriteLine("{0,6:#00.00}% {1}", (sizeDownloaded / (float)depotDownloadCounter.completeDownloadSize) * 100.0f, fileFinalPath);
+                callbacks?.DepotDownloadProgress?.Invoke(new DownloadCallbacks.SteamDepotDownloadProgress()
+                {
+                    Percentage = (depotDownloadCounter.sizeDownloaded / (float)depotDownloadCounter.completeDownloadSize) * 100.0f,
+                    FilePath = fileFinalPath,
+                    DepotSize = depotDownloadCounter.completeDownloadSize,
+                    DownloadedSize = depotDownloadCounter.sizeDownloaded
+                });
             }
         }
 

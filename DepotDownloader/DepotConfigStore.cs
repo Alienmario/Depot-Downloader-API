@@ -22,7 +22,7 @@ namespace DepotDownloader
             InstalledManifestIDs = [];
         }
 
-        static bool Loaded
+        public static bool Loaded
         {
             get { return Instance != null; }
         }
@@ -32,7 +32,7 @@ namespace DepotDownloader
         public static void LoadFromFile(string filename)
         {
             if (Loaded)
-                throw new Exception("Config already loaded");
+                return;
 
             if (File.Exists(filename))
             {
