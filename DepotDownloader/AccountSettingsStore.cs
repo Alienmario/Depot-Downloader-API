@@ -27,9 +27,9 @@ namespace DepotDownloader
         [ProtoMember(5, IsRequired = false)]
         public Dictionary<string, string> GuardData { get; private set; }
 
-        string FileName;
+        public string FileName;
 
-        AccountSettingsStore()
+        public AccountSettingsStore()
         {
             ContentServerPenalty = new ConcurrentDictionary<string, int>();
             LoginTokens = [];
@@ -38,10 +38,10 @@ namespace DepotDownloader
 
         public static bool Loaded
         {
-            get { return Instance != null; }
+            get { return Instance != null && Instance.FileName != null; }
         }
 
-        public static AccountSettingsStore Instance;
+        public static AccountSettingsStore Instance { get; set; } = new();
         static readonly IsolatedStorageFile IsolatedStorage = IsolatedStorageFile.GetUserStoreForAssembly();
 
         public static void LoadFromFile(string filename)
